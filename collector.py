@@ -1,21 +1,3 @@
-Here’s a clean, production-ready collector.py that:
-
-pulls jobs from Greenhouse and Lever (public, no-login JSON),
-
-filters to Analyst+ non-sales roles only,
-
-de-dupes and scores each job,
-
-and POSTs top results to your Google Sheets Apps Script Web App via SHEET_WEBAPP_URL.
-
-It’s designed for GitHub Actions (Python 3.11) with aiohttp only.
-
-Before you run:
-
-Put your Apps Script deployment URL into the repo secret SHEET_WEBAPP_URL.
-
-(Optional) Create plain text files slugs_greenhouse.txt and/or slugs_lever.txt (one company slug per line) to scale up without editing code.
-
 # collector.py
 # Purpose: Collect Analyst+ (non-sales) roles from Greenhouse & Lever and push to Google Sheets (Apps Script Web App).
 # Runtime: Python 3.11 (GitHub Actions), dependency: aiohttp
@@ -34,7 +16,6 @@ from typing import List, Dict, Any
 # -----------------------------
 # Config: Role filters
 # -----------------------------
-# Include ONLY titles that match one of these "Analyst+" non-sales patterns:
 INCLUDE_TITLE_PATTERNS = [
     r"\bfinancial analyst\b",
     r"\bcapital markets analyst\b",
@@ -58,7 +39,6 @@ INCLUDE_TITLE_PATTERNS = [
     r"\boperations analyst\b",
 ]
 
-# EXCLUDE if title contains any of these (sales-y / out-of-scope):
 EXCLUDE_TITLE_PATTERNS = [
     r"\bsales\b",
     r"\bbusiness development\b",
@@ -78,15 +58,12 @@ EXCLUDE_TITLE_PATTERNS = [
 INCLUDE_RE = re.compile("|".join(INCLUDE_TITLE_PATTERNS), re.I)
 EXCLUDE_RE = re.compile("|".join(EXCLUDE_TITLE_PATTERNS), re.I)
 
-# Optional: prefer US/remote-friendly roles
+# Optional: location soft bonus
 LOC_OK_RE = re.compile(r"\b(remote|united states|usa|anywhere|california|los angeles)\b", re.I)
 
 # -----------------------------
 # Config: Sources (slugs)
 # -----------------------------
-# You can maintain slugs in text files for scale without touching code:
-#   slugs_greenhouse.txt   (each line like: firstsolar)
-#   slugs_lever.txt        (each line like: databricks)
 def _load_slugs(fname: str, fallback: List[str]) -> List[str]:
     p = Path(fname)
     if p.exists():
@@ -94,17 +71,15 @@ def _load_slugs(fname: str, fallback: List[str]) -> List[str]:
     return fallback
 
 GREENHOUSE_SLUGS = _load_slugs("slugs_greenhouse.txt", [
-    # add/remove freely; these are examples
     "firstsolar", "sunrun", "nextracker", "enphase-energy"
 ])
 
 LEVER_SLUGS = _load_slugs("slugs_lever.txt", [
-    # examples
     "affirm", "databricks", "stripe"
 ])
 
 # -----------------------------
-# Fit scoring (simple, transparent)
+# Fit scoring
 # -----------------------------
 DESC_SKILLS = [
     "excel", "sql", "python", "model", "underwriting", "valuation",
@@ -114,20 +89,12 @@ DESC_SKILLS = [
 def fit_score(title: str, desc: str, loc: str) -> int:
     score = 0
     t = f"{title or ''} {desc or ''}".lower()
-
-    # Base: strong match on Analyst+ include
     if INCLUDE_RE.search(title or ""):
         score += 3
-
-    # Skills in description
     score += sum(1 for kw in DESC_SKILLS if kw in t)
     score = min(score, 5)
-
-    # Location bonus
     if loc and LOC_OK_RE.search(loc):
         score = min(score + 1, 5)
-
-    # Exclusion always zeroes out later (we filter before scoring), but keep returning >=0
     return max(score, 0)
 
 def make_id(url: str, title: str) -> str:
@@ -166,8 +133,6 @@ async def fetch_greenhouse_company(session: aiohttp.ClientSession, slug: str) ->
         jd_url = (j.get("absolute_url") or j.get("url") or "").strip()
         if not title or not jd_url:
             continue
-
-        # Apply filters
         if EXCLUDE_RE.search(title):
             continue
         if not INCLUDE_RE.search(title):
@@ -179,7 +144,7 @@ async def fetch_greenhouse_company(session: aiohttp.ClientSession, slug: str) ->
             "title": title,
             "url": jd_url,
             "location": loc,
-            "desc": ""  # greenhouse JSON endpoint doesn't include full desc here
+            "desc": ""
         })
     return out
 
@@ -198,23 +163,19 @@ async def fetch_lever_company(session: aiohttp.ClientSession, slug: str) -> List
         jd_url = (j.get("hostedUrl") or j.get("applyUrl") or "").strip()
         if not title or not jd_url:
             continue
-
-        # Title filters
         if EXCLUDE_RE.search(title):
             continue
         if not INCLUDE_RE.search(title):
             continue
 
-        # Location (Lever stores under categories.location as a string)
         loc = ""
         cats = j.get("categories") or {}
         if isinstance(cats, dict):
             loc = (cats.get("location") or "").strip()
 
-        # Description (plain text if available)
         desc = (j.get("descriptionPlain") or j.get("description") or "")
         if isinstance(desc, str):
-            desc = desc[:2000]  # cap
+            desc = desc[:2000]
 
         out.append({
             "source": "lever",
@@ -237,7 +198,6 @@ async def gather_all() -> List[Dict[str, Any]]:
             tasks.append(fetch_greenhouse_company(session, g))
         for l in LEVER_SLUGS:
             tasks.append(fetch_lever_company(session, l))
-
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
     jobs: List[Dict[str, Any]] = []
@@ -245,7 +205,6 @@ async def gather_all() -> List[Dict[str, Any]]:
         if isinstance(r, list):
             jobs.extend(r)
 
-    # Score + dedupe
     seen = set()
     cleaned: List[Dict[str, Any]] = []
     for j in jobs:
@@ -253,22 +212,17 @@ async def gather_all() -> List[Dict[str, Any]]:
         url = j.get("url", "")
         loc = j.get("location", "")
         desc = j.get("desc", "")
-
-        # (Double) guard against excluded titles
         if EXCLUDE_RE.search(title):
             continue
         if not INCLUDE_RE.search(title):
             continue
-
         j["fitscore"] = fit_score(title, desc, loc)
         j["id"] = make_id(url, title)
-
         if j["id"] in seen:
             continue
         seen.add(j["id"])
         cleaned.append(j)
 
-    # Sort by FitScore desc, then company/title
     cleaned.sort(key=lambda x: (-x["fitscore"], x.get("company",""), x.get("title","")))
     return cleaned
 
@@ -279,13 +233,9 @@ async def post_to_sheet(rows: List[Dict[str, Any]]) -> None:
     endpoint = os.environ.get("SHEET_WEBAPP_URL", "").strip()
     if not endpoint:
         print("ERROR: SHEET_WEBAPP_URL is not set. Aborting.")
-        # Non-zero exit so Actions shows failure; easier to debug.
         raise SystemExit(2)
 
-    payload = {
-        "rows": rows,
-        "ts": int(time.time())
-    }
+    payload = {"rows": rows, "ts": int(time.time())}
 
     async with aiohttp.ClientSession(headers={"Content-Type": "application/json", **HEADERS}) as session:
         try:
@@ -301,8 +251,6 @@ async def post_to_sheet(rows: List[Dict[str, Any]]) -> None:
 # -----------------------------
 async def main():
     jobs = await gather_all()
-
-    # Keep strong matches only (fitscore >= 3) and cap for a single run to avoid sheet spam
     top = [{
         "id": j["id"],
         "source": j["source"],
@@ -322,14 +270,3 @@ async def main():
 if __name__ == "__main__":
     asyncio.run(main())
 
-Notes / Tips
-
-Scaling up: add more company slugs to slugs_greenhouse.txt and slugs_lever.txt (one per line). Greenhouse & Lever JSON are public and safe to query in Actions.
-
-Filters: If you want to tweak what’s “Analyst+,” edit INCLUDE_TITLE_PATTERNS and EXCLUDE_TITLE_PATTERNS only.
-
-Location bias: LOC_OK_RE is a soft bonus; it doesn’t exclude.
-
-Posting: The script sends { "rows":[...], "ts": <unix> } to your Apps Script. Make sure your Web App’s doPost(e) reads e.postData.contents and appends to the Targets tab.
-
-Dependencies (GitHub Actions): pip install aiohttp.
