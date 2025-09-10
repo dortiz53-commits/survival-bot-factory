@@ -28,5 +28,23 @@ jobs:
         if: hashFiles('requirements.txt') != ''
         run: pip install -r requirements.txt
 
+      # 🔎 Preflight: prove the env vars are present and URL works
+      - name: Preflight env and URL check
+        run: |
+          echo "TARGETS_CSV_URL length: ${#TARGETS_CSV_URL}"
+          echo "SHEET_WEBAPP_URL length: ${#SHEET_WEBAPP_URL}"
+          test -n "$TARGETS_CSV_URL"
+          test -n "$SHEET_WEBAPP_URL"
+          echo "--- HTTP HEAD ---"
+          curl -sSIL "$TARGETS_CSV_URL" | sed -n '1,12p'
+          echo "--- First 5 lines of CSV ---"
+          curl -sSL "$TARGETS_CSV_URL" | head -n 5
+        env:
+          TARGETS_CSV_URL: ${{ secrets.TARGETS_CSV_URL }}
+          SHEET_WEBAPP_URL: ${{ secrets.TARGETS_CSV_URL }}
+
       - name: Run resolver
         run: python resolver.py
+        env:
+          TARGETS_CSV_URL: ${{ secrets.TARGETS_CSV_URL }}
+          SHEET_WEBAPP_URL: ${{ secrets.TARGETS_CSV_URL }}
