@@ -1,0 +1,53 @@
+name: collector
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 07:00 & 15:00 PT (PDT) ≈ 14:00 & 22:00 UTC
+    - cron: "0 14,22 * * *"
+  push:
+    branches: [ main ]
+    paths:
+      - "collector.py"
+      - ".github/workflows/collector.yml"
+      - "slugs_greenhouse.txt"
+      - "slugs_lever.txt"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: collector-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install aiohttp
+
+      - name: Show slug counts (optional)
+        run: |
+          GH=$(test -f slugs_greenhouse.txt && wc -l < slugs_greenhouse.txt || echo 0)
+          LV=$(test -f slugs_lever.txt && wc -l < slugs_lever.txt || echo 0)
+          echo "Greenhouse slugs: $GH"
+          echo "Lever slugs: $LV"
+
+      - name: Run collector
+        env:
+          SHEET_WEBAPP_URL: ${{ secrets.SHEET_WEBAPP_URL }}
+        run: python collector.py
