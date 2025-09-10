@@ -1,0 +1,46 @@
+name: resolver
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "15 14,22 * * *"
+  push:
+    branches: [ main ]
+    paths:
+      - "resolver.py"
+      - ".github/workflows/resolver.yml"
+      - "requirements.txt"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: resolver-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            pip install aiohttp
+
+      - name: Run resolver
+        env:
+          TARGETS_CSV_URL: ${{ secrets.TARGETS_CSV_URL }}
+          SHEET_WEBAPP_URL: ${{ secrets.SHEET_WEBAPP_URL }}
+        run: python resolver.py
