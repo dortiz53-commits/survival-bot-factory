@@ -3,7 +3,6 @@ name: collector
 on:
   workflow_dispatch:
   schedule:
-    # 07:00 & 15:00 PT (PDT) ≈ 14:00 & 22:00 UTC
     - cron: "0 14,22 * * *"
   push:
     branches: [ main ]
@@ -12,6 +11,7 @@ on:
       - ".github/workflows/collector.yml"
       - "slugs_greenhouse.txt"
       - "slugs_lever.txt"
+      - "requirements.txt"   # <— add
 
 permissions:
   contents: read
@@ -24,7 +24,6 @@ jobs:
   run:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -34,11 +33,12 @@ jobs:
         with:
           python-version: "3.11"
           cache: "pip"
+          cache-dependency-path: "requirements.txt"   # <— add
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install aiohttp
+          pip install -r requirements.txt              # <— change
 
       - name: Show slug counts (optional)
         run: |
